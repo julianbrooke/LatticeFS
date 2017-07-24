@@ -2,7 +2,7 @@
 
 This repository contains code, lexicons, test sets, and annotation guidelines associated with the following paper
 
-Julian Brooke, Jan Snajder, and Tim Baldwin. In press. Unsupervised Acquisition of Comprehensive Multiword Lexicons using Competition in an n-gram Lattice. Transactions of the ACL.
+Julian Brooke, Jan Snajder, and Tim Baldwin. In press. Unsupervised Acquisition of Comprehensive Multiword Lexicons using Competition in an n-gram Lattice. *Transactions of the ACL*.
 
 ## Code
 
