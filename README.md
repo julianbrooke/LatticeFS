@@ -14,17 +14,17 @@ Note: all these lexicons consist entirely of lemmatized forms and should be matc
 
 - ICWSM-FS.txt: Lexicon of English FS built using the 2009 ICWSM dataset
 - BNC-FS.txt : Lexicon of English FS built using the British National Corpus
-- Croatian-FS.txt: Lexicon of Croatian FS built using 
-- Japanese-FS.txt: Lexicon of Japanese FS built using
+- Croatian-FS.txt: Lexicon of Croatian FS built using fhrWaC
+- Japanese-FS.txt: Lexicon of Japanese FS built using a Japanese web corpus 
 
 ## Test sets
 
-These test sets were used to evaluate the models in the paper. 0 indicates non-FS, 2 indicates an FS, 4 indicates an example which was excluded due to annotator disagreement. They are also lemmatized.
+These test sets were used to evaluate the models in the paper. 0 indicates non-FS, 2 indicates an FS, 4 indicates an example which was excluded due to annotator disagreement. Like the lexicons, they are lemmatized.
 
-- ICWSM-test.txt: Test set for the ICWSM (English)
-- BNC-test.txt: Test set for the BNC (English)
-- Croation-test.txt: Test set for the fhrWaC Croatian corpus
-- Japanese-test.txt: Test set for the Japanese web corpus
+- ICWSM-test.txt: Test set for the ICWSM 2009 corpus (Burton et al. 2009)
+- BNC-test.txt: Test set for the BNC corpus (Burrard 2000)
+- Croatian-test.txt: Test set for the fhrWaC Croatian corpus (Snajder et al. 2013)
+- Japanese-test.txt: Test set for the Japanese web corpus (Hasimoto and Kawahara 2008)
 
 ## Annotation Guidelines
 
