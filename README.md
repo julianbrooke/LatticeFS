@@ -8,14 +8,14 @@ Julian Brooke, Jan Snajder, and Tim Baldwin. In press. Unsupervised Acquisition 
 
 *note: this code is only for documentary purposes, currently not usable without access to relevant data. Will be updated with a general, end-to-end solution which works for new corpora in advance of official publication of the paper*
 
-multi_helper.py: internal library for representation of multiword phrases using a single Python int
-pos_helper.py: internal library for matching POS sequences (for identifying gaps)
-corpus_reader.py: internal library for reading in corpora
-get_ngram_statistics.py: extracts initial n-gram statistics and applies n-gram frequency threshold
-get_best_POS.py: identifies the single best POS for each n-gram, which is used for calculating LPR statistics
-get_LPR_statistics.py: derives LPR statistics for n-grams
-build_lattice.py: creates lattice representation
-iterate_over_lattice.py: optimize lattice to identify formulaic sequences
+- multi_helper.py: internal library for representation of multiword phrases using a single Python int
+- pos_helper.py: internal library for matching POS sequences (for identifying gaps)
+- corpus_reader.py: internal library for reading in corpora
+- get_ngram_statistics.py: extracts initial n-gram statistics and applies n-gram frequency threshold
+- get_best_POS.py: identifies the single best POS for each n-gram, which is used for calculating LPR statistics
+- get_LPR_statistics.py: derives LPR statistics for n-grams
+- build_lattice.py: creates lattice representation
+- iterate_over_lattice.py: optimize lattice to identify formulaic sequences
 
 ## Lexicons
 
