@@ -37,8 +37,8 @@ These test sets were used to evaluate the models in the paper. 0 indicates non-F
 
 ## Annotation Guidelines
 
-Annotators were provided with a copy of relevant sections of Wray (2008), namely Chapter 1, pp. 9-16, which offers initial defintions, Chapter 8 pp. 93-99, which discusses how to identify FS in general terms, and Chapter 9 pp. 113-127, which provides explicit diagnostic criteria. As such, the guidelines below are intended to supplement an existing understanding of FS with practical tips for annotation. The "recalls" annotation was folded into the "not an FS" annotation, it was mostly included to allow annotators to give a near-miss "partial credit".
+Annotators were provided with a copy of relevant sections of Wray (2008), namely Chapter 1, pp. 9-16, which offers initial defintions, Chapter 8 pp. 93-99, which discusses how to identify FS in general terms, and Chapter 9 pp. 113-127, which provides explicit diagnostic criteria. As such, the guidelines below are intended to supplement an existing understanding of FS with practical tips for annotation. Note that the "recalls" annotation was folded into the "not an FS" annotation, it was mostly included to allow annotators to give a near-miss "partial credit".
 
 - FS-annotation-English.pdf: The original guidelines
-- FS-annotation-Croatian.pdf: Translation of the English guidelines into Croatian, with Croatian specific examples
-- FS-annotation-Japanese.pdf: Translation of the English guidelines into Japanese, with Japanese specific examples
+- FS-annotation-Croatian.pdf: Addendum to English guidelines in Croatian
+- FS-annotation-Japanese.pdf: Addendum to English guidelines in Japanese
