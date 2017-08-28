@@ -7,43 +7,17 @@
 ### also assigned (different) ids at this step 
 
 
+import sys
 import cPickle
-import re
-from pos_helper import matches_gap_en,matches_gap_fr,matches_gap_ja,matches_gap_ja_simple, matches_gap_hr,matches_gap_en_bnc,matches_gap_universal
+import lang_specific_helper
 from multiprocessing import Process,Queue
 from multi_helper import *
-from corpus_reader import read_sentence_from_corpus_ICWSM_quick,read_sentence_from_corpus_BNC,read_sentence_from_corpus_ja,read_sentence_from_corpus_hr,read_sentence_from_corpus_simple
-import sys
-
+from corpus_reader import read_sentence_from_corpus
+import lang_specific_helper
 import gc
 gc.disable()
 
-good_word = re.compile("^[A-Za-z]+([A-Za-z']*|[A-Za-z\-]+[A-Za-z]+)$")
 
-bad_ja_word = set(u"０１２３４５６７８９＞｛　｝（　）［　］【　】、，…‥。・「　」『　』　〜：！？♪.,'-?!<>[]{}|“／”；−┐▲．＿卍■Г×┘〕＊＾’→●￣☆〇ＸＡＢＣＤＥＦＧＨＩＪＫＬＭＮＯＰＱＲＳＴＵＶＷＸＹＺ")
-
-#bad_ja_word = re.compile(u"記号|URL|web誤脱|空白")
-
-
-def check_good_en(pair):
-    return good_word.search(pair[0])    
-
-def all_good_words_en(span,start,end): # used to exclude nonalphabetic words from gaps
-    for i in range(start,end):
-        if not good_word.search(span[i][0]):
-            return False
-    return True
-
-def check_good_ja(pair):
-    #if u"記号" in span[i][1] or span[i][1] == u"URL" or span[i][1] = "web誤脱" or span[i][1] = "空白":
-    return pair[0] not in bad_ja_word
-
-def all_good_words_ja(span,start,end):
-    for i in range(start,end):
-        if not check_good_word(span[i]):
-            return False
-
-    return True
 
 
 
@@ -71,35 +45,12 @@ def get_ngrams(n,start,end,full_ngrams,full_skipgrams,rev_id_dict,options,return
                     ngram = get_multi_id_mixed(words[i-1],multi_id)
                     temp_ngrams[ngram] = temp_ngrams.get(ngram,0) + 1
             last_matched_other = matched_other
-        '''
-        at_point = False
-        for i in range(len(words) - 3):
-            if get_multi_id(words[i:i+4]) == 3206725044157547480 and n == 2:
-                print "at point"
-                print pos[i:i+4]
-                at_point = True
-                point_start = i
-        '''
         for i in range(len(words) - 2):
             if words[i] != -2:
                 j = i + 2
-                '''
-                if at_point and i == point_start:
-                    print i
-                    print j
-                    print j < len(words)
-                    print matches_gap(pos, i + 1, j)
-                    print pos[i+1:j]
-                    print all_good_words(sentence,i+1,j)
-                '''
                 while j < len(words) and matches_gap(pos, i + 1, j) and all_good_words(sentence,i+1,j) and words[j] != -2:
                     if n == 2:
                         multi_id = get_multi_id([0,words[i],words[j]])
-                        '''
-                        if multi_id == 12232324808704:
-                            gap += 1
-                            print "added gap3"
-                        '''
                         temp_skipgrams[multi_id] = temp_skipgrams.get(multi_id,0) + 1
                     else:
                         for k in range(n -2):
@@ -119,11 +70,6 @@ def get_ngrams(n,start,end,full_ngrams,full_skipgrams,rev_id_dict,options,return
                                     temp_words.extend(words[start_index - 1:i + 1])
                                     temp_words.extend(words[j:end_index])
                                     multi_id = get_multi_id(temp_words)
-                                    '''
-                                    if multi_id == 12232324808704:
-                                        gap += 1
-                                        print "added gap1"
-                                    '''
                                     temp_skipgrams[multi_id] = temp_skipgrams.get(multi_id,0) + 1
                                 if i == start_index and end_index < len(sentence) and get_multi_id(words[j:end_index + 1]) in full_ngrams:
                                     temp_words = []
@@ -131,74 +77,23 @@ def get_ngrams(n,start,end,full_ngrams,full_skipgrams,rev_id_dict,options,return
                                     temp_words.extend(words[start_index:i + 1])
                                     temp_words.extend(words[j:end_index + 1])
                                     multi_id = get_multi_id(temp_words)
-                                    '''
-                                    if multi_id == 12232324808704:
-                                        gap += 1
-                                        print "added gap2"
-                                    '''
                                     temp_skipgrams[multi_id] = temp_skipgrams.get(multi_id,0) + 1                                      
                     j+=1
-                    '''
-                    if at_point and i == point_start:
-                        print i
-                        print j
-                        print j < len(words)
-                        print matches_gap(pos, i + 1, j)
-                        print all_good_words(sentence,i+1,j)
-                    '''
-    '''
-    print "total_gap"
-    print gap
-    '''
     return_Q.put((temp_ngrams,temp_skipgrams))
 
 
-not_wanted_en_icwsm = set(["en","enhy","www","http","im", "dont", "didnt","doesnt","cant","wont","shouldnt","aint","ive","whats","arent","couldnt", "hadnt","hasnt","havent","isnt","shes","wasnt","werent","whod","wouldnt","youre","youve","whos","thats","wheres","com"])
-not_wanted_fr = set(["www","http","com"])
-not_wanted_ja = set()
 
-f = open("temp_options_%s.dat" % sys.argv[1],"rb")
+
+f = open("%s_options.dat" % sys.argv[1],"rb")
 options = cPickle.load(f)
 f.close()
-if options.lang == "uni":
-    not_wanted = set([])
-    read_sentence_from_corpus = read_sentence_from_corpus_BNC
-    matches_gap = matches_gap_universal
-    check_good_word = check_good_en
-    all_good_words = all_good_words_en
-elif options.lang == "fr":
-    not_wanted = not_wanted_fr
-    matches_gap = matches_gap_fr
-    check_good_word = check_good_en
-    all_good_words = all_good_words_en
-    #suffix = "fr"
-elif options.lang == "ja":
-    read_sentence_from_corpus = read_sentence_from_corpus_ja
-    not_wanted = not_wanted_ja
-    #matches_gap = matches_gap_ja
-    matches_gap = matches_gap_ja_simple
-    check_good_word = check_good_ja
-    all_good_words = all_good_words_ja
-    #suffix = "ja"
-elif options.lang == "en":
-    if "bnc" in options.corpus:
-        matches_gap = matches_gap_en_bnc
-        read_sentence_from_corpus = read_sentence_from_corpus_BNC
-        not_wanted = set([])
-        #suffix = "BNC"
-    else:
-        matches_gap = matches_gap_en
-        read_sentence_from_corpus = read_sentence_from_corpus_ICWSM_quick
-        not_wanted = not_wanted_en_icwsm
-        #suffix = "ICWSM
-    check_good_word = check_good_en
-    all_good_words = all_good_words_en
-else:
-    matches_gap = matches_gap_en
-    read_sentence_from_corpus = read_sentence_from_corpus_simple
-    not_wanted = not_wanted_en_icwsm
-    check_good_word = check_good_en
-    all_good_words = all_good_words_en    
+
+lang_specific_helper.set_lang(options.lang, options.corpus)
+
+not_wanted = lang_specific_helper.not_wanted
+matches_gap = lang_specific_helper.matches_gap
+check_good_word = lang_specific_helper.check_good_word
+all_good_words = lang_specific_helper.all_good_words  
 
 if __name__ == "__main__":
 
@@ -214,19 +109,11 @@ if __name__ == "__main__":
         sentence_count += 1
         token_count += len(sentence)
         for pair in sentence:
-            #if pair[0] == u"ケン":
-            #    print "|".join([temp_pair[0] for temp_pair in sentence])
-            #    print "|".join([temp_pair[1] for temp_pair in sentence])
-            #    print check_good_word(pair)
             if check_good_word(pair) and not pair[0] in not_wanted:
                 temp_ngrams[pair[0]] = temp_ngrams.get(pair[0],0) + 1
                 if pair[1] not in POS_rev_id_dict:
                     POS_rev_id_dict[pair[1]] = len(POS_rev_id_dict) + 1
                     POS_id_dict[POS_rev_id_dict[pair[1]]] = pair[1]
-        #if sentence_count == 10000000:
-        #    break
-        #for i in range(len(sentence)):
-        #    print matches_gap([sentence[i][1]],0,1)
 
     cutoff = token_count/options.frequency
 
@@ -305,12 +192,12 @@ if __name__ == "__main__":
             print "added %d gapped n-grams" % skipgram_count
     #for ngram in full_ngrams:
     #    print " ".join(id_dict[word] for word in decode_id(ngram))
-    fout = open("temp_ngrams_%s.dat"  % options.lang,"wb")
+    fout = open("%s_ngrams.dat"  % options.output,"wb")
+    cPickle.dump(sentence_count,fout,-1)
     cPickle.dump(id_dict,fout,-1)
     cPickle.dump(full_ngrams,fout,-1)
     cPickle.dump(full_skipgrams,fout,-1)
     cPickle.dump(token_count,fout,-1)
-    cPickle.dump(sentence_count,fout,-1)
     cPickle.dump(POS_id_dict,fout,-1)
     fout.close()
 

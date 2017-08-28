@@ -9,10 +9,9 @@ import gc
 import cPickle
 import sys
 from multiprocessing import Process,Queue
-from pos_helper import matches_gap_en,matches_gap_fr,matches_gap_ja,matches_gap_hr,matches_gap_en_bnc, matches_gap_universal
+import lang_specific_helper
 from multi_helper import *
-#from corpus_reader import read_sentence_from_corpus
-from corpus_reader import read_sentence_from_corpus_ICWSM_quick,read_sentence_from_corpus_BNC,read_sentence_from_corpus_ja,read_sentence_from_corpus_hr,read_sentence_from_corpus_simple
+from corpus_reader import read_sentence_from_corpus
 
 gc.disable()
 
@@ -80,47 +79,22 @@ def get_pos_dict_setup(start_sent,end_sent,full_ngrams,full_skipgrams,rev_id_dic
     Q.put(-1)
 
 
-lang = sys.argv[1]
-
-f = open("temp_options_%s.dat" % lang ,"rb")
+f = open("%s_options.dat" % sys.argv[1],"rb")
 options = cPickle.load(f)
 f.close()
-if options.lang == "uni":
-    matches_gap = matches_gap_universal
-    read_sentence_from_corpus = read_sentence_from_corpus_BNC
-elif options.lang == "en":
-    if "bnc" in options.corpus:
-        prefix = "BNC"
-        matches_gap = matches_gap_en_bnc
-        read_sentence_from_corpus = read_sentence_from_corpus_BNC
-    else:
-        prefix = 'ICWSM'
-        matches_gap = matches_gap_en
-        read_sentence_from_corpus = read_sentence_from_corpus_ICWSM_quick
-elif options.lang == "ja":
-    prefix = 'ja'
-    matches_gap = matches_gap_ja
-    read_sentence_from_corpus = read_sentence_from_corpus_ja
-elif options.lang == "hr":
-    prefix = 'hr'
-    matches_gap = matches_gap_hr
-    read_sentence_from_corpus = read_sentence_from_corpus_hr
-    
-elif options.lang == "fr":
-    matches_gap = matches_gap_fr
-else:
-    prefix = options.lang
-    matches_gap = matches_gap_en
-    read_sentence_from_corpus = read_sentence_from_corpus_simple    
+
+lang_specific_helper.set_lang(options.lang, options.corpus)
+matches_gap = lang_specific_helper.matches_gap
+
 
 if __name__ == "__main__":
 
-    f = open("temp_ngrams_%s.dat" % lang,"rb")
+    f = open("%s_ngrams.dat"  % options.output,"rb")
+    sentence_count = cPickle.load(f)
     id_dict = cPickle.load(f)
     full_ngrams = cPickle.load(f)
     full_skipgrams = cPickle.load(f)
     token_count = cPickle.load(f)
-    sentence_count = cPickle.load(f)
     POS_id_dict = cPickle.load(f)
     f.close()
 
@@ -178,11 +152,6 @@ if __name__ == "__main__":
         best_pos = 0
             
         for pos in best_pos_dict[ngram]:
-            '''
-            if ngram == 3206725044157547480:
-                print [POS_id_dict[temp] for temp in decode_id(pos)]
-                print best_pos_dict[ngram][pos]
-            '''
             if best_pos_dict[ngram][pos] > best:
                 best = best_pos_dict[ngram][pos]
                 best_pos = pos
@@ -199,7 +168,7 @@ if __name__ == "__main__":
         best_pos_skip_dict[ngram] = best_pos
 
 
-    f = open("temp_best_POS_%s.dat"  % lang,"wb")
+    f = open("%s_best_POS.dat" % options.output,"wb")
     cPickle.dump(best_pos_dict,f,-1)
     cPickle.dump(best_pos_skip_dict,f,-1)
     cPickle.dump(unigram_dict,f,-1)

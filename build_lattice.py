@@ -1,390 +1,293 @@
+# -*- coding: utf-8 -*-
+### This code defines a node in the lattice, and builds a lattice of these nodes based on n-gram subsumption relationships. When the process is complete,
+### the above nodes for each node contain a list of nodes whose n-grams contain the present n-gram plus one more word, and below_nodes are n-grams which
+### have one word missing (possibly an internal one). Syntactic_predictability is the minLPR metric defined in the paper, and is calculated here from the
+### individual lexical predictability ratios from get_LPR_statistics.py. The nodes from the lattice are contained in the nodes list, which is sorted by
+### frequency (from most to least frequent)
+
 import cPickle
 import gc
 import sys
-gc.disable()
 from multi_helper import *
-from pos_helper import matches_gap_en
+import lang_specific_helper
+from corpus_reader import read_sentence_from_corpus
 import math
+from multiprocessing import Process,Queue,Manager
+from collections import Counter
+gc.disable()
 
-pronouns = set(["he","she","i","you","we","they","his","her","him","me","us","it","them","their","my","your","yours","mine","our","ours","theirs","hers"])
 
-matches_gap = matches_gap_en
+min_overlaps = 5 # don't include any overlaps with less than this count
+cover_cutoff = 2.0/3.0 # ratio used for deciding if one n-gram (hard) covers another
+min_syn_pred_log = 1.0 # if the log of the syntactic predictabilty (minLPR) less
+                       # than this, node is turned off (like hard cover)
+
 
 class Node:
-    def __init__(self,id_num, pos_num, count, topic_predictability, syntactic_predictability,length):
+    def __init__(self,ngram, id_num, pos_num, count, syntactic_predictability,length,is_skip):
+        self.ngram = ngram
         self.id_num = id_num
         self.pos_num = pos_num
         self.count = count
-        self.log_count = math.log(count)
-        self.topic_predictability = topic_predictability
+        self.log_count = math.log(count,2)
         self.syntactic_predictability = syntactic_predictability
         self.length = length
         self.above_nodes = []
         self.below_nodes = []
+        self.overlaps = {}
+        self.has_pronoun = False
+        self.is_skip = is_skip
+        self.is_covered = False
 
     def __hash__(self):
         return self.id_num
 
 
     def __cmp__(self,other):
-        if self.length < other.length:
-            return -1
-        if self.length > other.length:
-            return 1
-        this_num = self.syntactic_predictability #+ self.topic_predictability
-        that_num = other.syntactic_predictability #+ other.topic_predictability
+        this_num = self.count
+        that_num = other.count
         if this_num > that_num:
             return -1
         elif this_num == that_num:
-            return 0
+            if self.syntactic_predictability > other.syntactic_predictability:
+                return -1
+            elif self.syntactic_predictability < other.syntactic_predictability:
+                return 1
+            else:
+                return 0
         else:
             return 1
-        #return (self.syntactic_predictability + self.topic_predictability).__cmp__(other.syntactic_predictability + other.topic_predictability)
+             
 
 
-def get_real_pos(ngram,pos_id):
-    pos = decode_id(pos_id)
-    words = decode_id(ngram)
-    if len(words) == len(pos):
-        return pos_id
+def get_syntactic_predictability_reg(words,cond_prob_dict):
+    final_set = []
+    for i in range(len(words)):
+        temp_set = []
+        for j in range(0,i + 1):
+            for k in range(i +1, len(words) + 1):
+                if k - j == 1:
+                    continue
+                temp_set.append(cond_prob_dict[get_multi_id_range(words,j, k)][i-j])
+        final_set.append(max(temp_set))
+    if len(final_set) == 2:
+        return max(min(final_set),0)
     else:
-        print pos
-        return get_multi_id(pos[2:pos[1] + 2] + pos[pos[0] + 2:])
+        return final_set
 
-syntactic_predictability_counts = {}
-lexical_predictability_counts = {}
+def get_syntactic_predictability_skip(words,loc,cond_prob_dict,cond_prob_dict_skip):
+    final_set = []
+    for i in range(len(words)):
+        temp_set = []
+        for j in range(0,i + 1):
+            for k in range(i +1, len(words) + 1):
+                if k - j == 1:
+                    continue
+                if j <= loc and k > loc + 1:
+                    temp_set.append(cond_prob_dict_skip[get_multi_id_range_skip(words,j, loc + 1, loc + 1, k)][i-j])
+                else:
+                    temp_set.append(cond_prob_dict[get_multi_id_range(words,j, k)][i-j])
+        final_set.append(max(temp_set))
 
-syntactic_predictability_skip_counts = {}
-lexical_predictability_skip_counts = {}
+    if len(final_set) == 2:
+        return max(min(final_set),0)
+    else:
+        return final_set
 
-for i in range(8):
-  
-    syntactic_predictability_counts[i] = {}
-    lexical_predictability_counts[i] = {}
 
-    syntactic_predictability_skip_counts[i] = {}
-    lexical_predictability_skip_counts[i] = {}  
+def check_covered(node):
+    org_count = node.count
+    node.is_covered = False
 
-def get_syntactic_predictability(ngram,words,pos,pos_counts,ngrams,unigrams):
-    total_count = float(ngrams[ngram])
-    #print "-------"
+    if node.has_pronoun:
+        found = False
+        for bnode in node.below_nodes: # once above
+            if not node_lookup[bnode].has_pronoun and (org_count > node_lookup[bnode].count * cover_cutoff):
+                found = True
+        if not found:
+            node.is_covered = True
+    ref_count = org_count * cover_cutoff                
 
-    #rarest_ngram_count = 1000000000000000
-    #if len(words) == 2:
-    #    best_syn_pred= 999999999
-    #else:
-    best_syn_pred= 0.0
+    for anode in node.above_nodes:
+        if node_lookup[anode].count > ref_count:
+            node.is_covered = True
     
-    #print "main"
-    #print [id_dict[word] for word in words]
-    #print [POS_id_dict[pos[k]] for k in range(len(pos))]
-    if len(pos) > len(words):
-        start = pos[1]
-        end = pos[0]
-        pos = pos[2:]
-        temp_words = words[:start] + [0]*(end-start) + words[start:]
-        #print start
-        #print end
-        #print len(pos)
-        for k in range(0,start) + range(end, len(pos)):
-            #print k
-            if k < start:
-                temp_ngram_id = get_multi_id_range_multi_skip(temp_words,0, k, k+1, start, end, len(pos))
-            else:
-                temp_ngram_id = get_multi_id_range_multi_skip(temp_words,0, start, end, k, k+1, len(pos))
-            #print "sub"
-            #print [id_dict[word] for word in decode_id(temp_ngram_id)]
-            if temp_ngram_id in ngrams:
-                #print "yes"
-                if not is_multi(temp_ngram_id):
-                    if k == 0:
-                        ID = temp_words[-1]
-                        ID = ID << 18 | pos[-1]
-                        #id_dict[0] = "missing"
-                        #print [id_dict[word] for word in words]
-                        #print id_dict[words[j-1]]
-                        #print [POS_id_dict[pos_i] for pos_i in pos]
-                        #print POS_id_dict[pos[j-1]]
-                        sub_count = unigrams[ID]
-                    else:
-                        ID = temp_words[0]
-                        ID = ID << 18 | pos[0]
-                        sub_count = unigrams[ID]
-
-                else:
-                    sub_count = ngrams[temp_ngram_id]
-
-                if sub_count < total_count:
-                    sub_count = total_count
-                #if sub_count < rarest_ngram_count:                
-                #    rarest_ngram_count = sub_count
-                #else:
-                #    continue
-                for i in range(0, len(pos) - 1):
-                    for j in range(i+2,  len(pos) + 1):
-                #if True:
-                            #i = 0
-                            #j = len(pos)
-                            if i <=k <j and i < start and end < j:
-                
-                                #print "here"
-                                #print k
-                                #print i
-                                #print j
-
-                                num = float(pos_counts[get_multi_id_range_one_word(pos,temp_words,i,j,k)])
-                                denom = float(pos_counts[get_multi_id_range_wild(pos,i,j,k)])
-                                print k
-                                print "skip"
-                                print num
-                                print denom
-                                print total_count
-                                print sub_count
-                            
-                                if pos[k] in POS_id_dict and POS_id_dict[pos[k]].startswith("PP"):
-                                #if id_dict[temp_words[k]] in pronouns:
-                                    result = 1 - (total_count/sub_count)
-                                    print "pronoun"
-                                else:
-                                    #result =  min(1 - (total_count/sub_count),(num/denom)*(sub_count/total_count)*(1 - total_count/num))
-                                    #result =  min(1 - (total_count/sub_count),(num/denom)*(sub_count/total_count)*(1 - sub_count/denom))
-                                    #result =  (num/denom)*(sub_count/total_count)
-                                    #result = (num/denom)*(sub_count/total_count)*max(0,(1 - (total_count/num))) + (1 - (total_count/sub_count))*min(1,(total_count/num))
-                                    result = min((num/denom)*(sub_count/total_count),(1 - (total_count/sub_count)))
-                                    #result = (num/denom)*(sub_count/total_count)*(1.0/(len(words) - 1)) + (1 - (total_count/sub_count))*((len(words) - 2.0)/(len(words) - 1))
-                                
-                                #result = result = (num/denom)*(sub_count/total_count)
-                                #print num/denom
-                                #print result
-                                if result > best_syn_pred:
-                                #if (len(words) > 2 and result > best_syn_pred) or (len(words) == 2 and result < best_syn_pred):
-                                    best_syn_pred = result
-                                    best_k = k
-                        
-                        
-    else:
-        for k in range(0,len(pos)):
-
-            temp_ngram_id = get_multi_id_range_skip(words,0,k,k+1,len(pos))
-
-            if temp_ngram_id in ngrams:
-
-                if not is_multi(temp_ngram_id):
-                    if k == 0:
-                        ID = words[1]
-                        ID = ID << 18 | pos[1]
-                        sub_count = unigrams[ID]
-                    else:
-                        ID = words[0]
-                        ID = ID << 18 | pos[0]
-                        sub_count = unigrams[ID]
-                else:
-                    sub_count = ngrams[temp_ngram_id]
-
-                if sub_count < total_count:
-                    sub_count = total_count
+def get_all_nodes_down_covered(ref_node):
+    ref_count = ref_node.count * (1/cover_cutoff)
+    new_nodes = ref_node.below_nodes
+    good_nodes = set()
+    while new_nodes:
+        next_nodes = set()
+        for node_id in new_nodes:
+            if node_lookup[node_id].count < ref_count:
+                good_nodes.add(node_lookup[node_id])
+                next_nodes.update(node_lookup[node_id].below_nodes)
+        new_nodes = next_nodes
+    return good_nodes
 
 
-                #if sub_count < rarest_ngram_count:
-                #    rarest_ngram_count = sub_count
-                #else:
-                #    continue                    
-                #print "sub"
-                #print [id_dict[word] for word in decode_id(temp_ngram_id)]
-                for i in range(0,len(pos)-1):
-                    for j in range(i + 2, len(pos) + 1):
-                            if i <=k <j:
-                                #print "here"
-                                #print k
-                                #print i
-                                #print j
-
-                                num = float(pos_counts[get_multi_id_range_one_word(pos,words,i,j,k)])
-                                denom =  float(pos_counts[get_multi_id_range_wild(pos,i,j,k)])
-                                print k
-                                print "regular"
-                                print num
-                                print denom
-                                print total_count
-                                print sub_count
-                                
-                                if pos[k] in POS_id_dict and POS_id_dict[pos[k]].startswith("PP"):
-                                #if id_dict[words[k]] in pronouns:
-                                    print "pronoun"
-                                    result = 1 - (total_count/sub_count)
-                                else:
-                                    #result =  min(1 - (total_count/sub_count),(num/denom)*(sub_count/total_count)*(1 - total_count/num))
-                                    #result =  min(1 - (total_count/sub_count),(num/denom)*(sub_count/total_count)*(1 - sub_count/denom))
-                                    #result =  (num/denom)*(sub_count/total_count)
-                                    result = min((num/denom)*(sub_count/total_count),(1 - (total_count/sub_count)))
-                                    #result = (num/denom)*(sub_count/total_count)*(1.0/(len(words) - 1) + (1 - (total_count/sub_count))*((len(words) - 2.0)/(len(words) - 1))
-                                    #result = (num/denom)*(sub_count/total_count)*max(0,(1 - (total_count/num))) + (1 - (total_count/sub_count))*min(1,(total_count/num))                                
-                                #result = result = (num/denom)*(sub_count/total_count)
-                                print result
-                                #if (len(words) > 2 and result > best_syn_pred) or (len(words) == 2 and result < best_syn_pred):
-                                if result > best_syn_pred:
-                                    best_syn_pred = result
-                                    best_k = k
+def set_shared_syntactic_predictability(ref_node):
+    local_nodes = get_all_nodes_down_covered(ref_node)
+    local_nodes.add(ref_node)
+    ref_node.syntactic_predictability = max([node.syntactic_predictability for node in local_nodes])
+    if ref_node.syntactic_predictability < min_syn_pred_log:
+        ref_node.is_covered = True
 
 
-    if best_syn_pred == 0:
-        print "!!!!!!!!!!!!!!!!!!!!!!!!!!!"
-        print [id_dict[word] for word in words]
-    #else:
-    #    print "......"
-
-        best_syn_pred = 0.0000001
-    best_syn_pred = 1/best_syn_pred
-
-    return best_syn_pred
-                        
-                        
-                    
-
-
+def properly_overlaps(range1,range2,sentence):
+    nums1 = set(range(range1[0],range1[1]))
+    if len(range1) == 5:
+        nums1.update(range(range1[2], range1[3]))
         
+    nums2 = set(range(range2[0],range2[1]))
+    if len(range2) == 5:
+        nums2.update(range(range2[2], range2[3]))
+    intersected = nums1.intersection(nums2)
 
-def get_topic_predictability(ngram,words,total_counts,paired_counts):
-    max_topic = 0.0
-    #print [id_dict[word] for word in words]
-    if ngram in total_counts:
-        total_df = float(total_counts[ngram])
-        for i in range(1, len(words)):
-            #print i
-            first_part = get_multi_id_range(words,0,i)
-            second_part = get_multi_id_range(words,i, len(words))
-            if first_part in paired_counts and second_part in paired_counts[first_part]:
-                temp_pred =(paired_counts[first_part][second_part] - total_df)/paired_counts[first_part][second_part]
-                #print temp_pred
-                if temp_pred > max_topic:
-                    max_topic = temp_pred
-    return max_topic
-    
-
-    
-
-def get_predictabilities(ngram,pos,pos_counts,total_counts,paired_counts,ngrams,unigrams):
-    words = decode_id(ngram)
-    pos = decode_id(pos)
-    return get_syntactic_predictability(ngram,words,pos,pos_counts,ngrams, unigrams), get_topic_predictability(ngram,words, total_counts,paired_counts)
-    
-
-def get_relevant_nodes(node,node_lookup):
-    #print "node:"
-
-    #print [id_dict[word] for word in decode_id(ngram_lookup[node.id_num])]
-    #print node.count
-           
-    compare = node.count
-    new_nodes = set([node.id_num])
-    all_nodes = set()
-    while new_nodes:
-        temp_nodes = set()
-        for new_node in new_nodes:
-            for below_node in node_lookup[new_node].below_nodes:
-                if compare > node_lookup[below_node].count*relevant_node_cutoff:
-                    temp_nodes.add(below_node)
-        new_nodes = temp_nodes.difference(all_nodes)
-        #for below_node in new_nodes:
-        #    print "relevant below"
-        #    print [id_dict[word] for word in decode_id(ngram_lookup[below_node])]
-        #    print node_lookup[below_node].count
-        all_nodes.update(temp_nodes)
-
-    new_nodes = set([node.id_num])
-    all_nodes2 = set()
-    while new_nodes:
-        temp_nodes = set()
-        for new_node in new_nodes:
-            for above_node in node_lookup[new_node].above_nodes:
-                if node_lookup[above_node].count > compare*relevant_node_cutoff:
-                    temp_nodes.add(above_node)
-        new_nodes = temp_nodes.difference(all_nodes)
-        #for above_node in new_nodes:
-        #    print "relevant above"
-        #    print [id_dict[word] for word in decode_id(ngram_lookup[above_node])]
-        #    print node_lookup[above_node].count
-        all_nodes.update(temp_nodes)
-    all_nodes.update(all_nodes2)
-    all_nodes.add(node.id_num)
-    return list(all_nodes)
+    return not nums1.issubset(nums2) and not nums2.issubset(nums1) and len(nums1.intersection(nums2)) > 0
 
 
-use_brown_nouns = False
+def get_paired_counts(start_sent,end_sent,all_ngrams,rev_id_dict,inQ,Q):
+    while True:
+        wanted= inQ.get()
+        if wanted == None:
+            break
+        overlaps = {}
+        sentence_count = 0
+        for sentence in read_sentence_from_corpus(options.corpus,start_sent,end_sent):
+            sentence_count += 1
+            if sentence_count % 10000 == 0:
+                #print sentence_count
+                sys.stdout.flush()
+            org_pos = [pair[1] for pair in sentence]
+            temp_words = []
+            words = []
+            for i in range(len(sentence)):
+                if sentence[i][0] in rev_id_dict:
+                    temp_words.append(sentence[i][0])
+                    words.append(rev_id_dict[sentence[i][0]])
+                else:
+                    words.append(-2)
+            temp_set = set()
+            ranges = []
+            for i in range(len(words)):            
+                matched = True
+                j = i + 1
+                while j < len(words) + 1 and matched:
+                    multi_id = get_multi_id_range(words,i,j)
+                    if multi_id in all_ngrams:
+                        if multi_id in wanted:
+                            ranges.append([i, j,multi_id])
+                        k = 1
+                        while j + k < len(words) and matches_gap(org_pos,j,j+k):
+                            m = 1                    
+                            while j +k +m < len(words) + 1:
+                                multi_id = get_multi_id_range_skip(words,i,j,j+k,j+k+m)
+                                if multi_id in all_ngrams:
+                                    if multi_id in wanted:
+                                        ranges.append([i,j,j+k,j+k+m,multi_id])
+                                else:
+                                    break
+                                m +=1                            
+                            k+= 1
+                    else:
+                        matched = False
+                    j+= 1
+
+            for i in range(len(ranges)):
+                j = i + 1
+                while j < len(ranges) and ranges[j][0] + 1 <= ranges[i][-2]:
+                    if properly_overlaps(ranges[i],ranges[j],sentence):
+                        to_sort = [ranges[i][-1],ranges[j][-1]]
+                        to_sort.sort()
+                        pair = tuple(to_sort)
+                        overlaps[pair] = overlaps.get(pair,0) + 1
+                    j += 1
+
+            if sentence_count % 1000 == 0:
+                Q.put(overlaps)
+                overlaps = {}
+        Q.put(overlaps)
+        Q.put(-1)
+
 
 if __name__ == "__main__":
-    relevant_node_cutoff = 0.05
 
-    #def load_lattice():
-    ngram_count = 0
-    f = open("initial_ngrams_2.dat","rb")
-    id_dict = cPickle.load(f)
-    ngrams = cPickle.load(f)
-    token_count = cPickle.load(f)
+    f = open("%s_options.dat" % sys.argv[1],"rb")
+    options = cPickle.load(f)
+    f.close()
+
+    lang_specific_helper.set_lang(options.lang, options.corpus)
+    has_pronoun = lang_specific_helper.has_pronoun
+    matches_gap = lang_specific_helper.matches_gap
+
+
+
+
+    f = open("%s_ngrams.dat" % options.output,"rb")
     sentence_count = cPickle.load(f)
+    id_dict = cPickle.load(f)
+    word_counts = cPickle.load(f)
+    skip_word_counts = cPickle.load(f)   
+    f.close()
+
+    rev_id_dict = {}
+    for ID in id_dict:
+        rev_id_dict[id_dict[ID]] = ID
+
+    all_ngrams = set(word_counts)
+    all_ngrams.update(skip_word_counts)
+    word_counts = None
+    skip_word_counts = None
+
+
+
+    intervals = []
+    for i in range(options.workers):
+        intervals.append(i*(sentence_count/options.workers))
+    intervals.append(sentence_count)
+
+
+    processes = []
+    Q = Queue()
+    inQs = []
+
+                          
+            
+    for i in range(options.workers):
+        inQ = Queue()
+        inQs.append(inQ)
+        processes.append(Process(target=get_paired_counts,args=(intervals[i],intervals[i+1],all_ngrams,rev_id_dict,inQ,Q)))
+        processes[-1].daemon = True
+        processes[-1].start()
+
+    all_ngrams = None
+    f = open("%s_ngrams.dat" % options.output,"rb")
+    sentence_count = cPickle.load(f)
+    id_dict = cPickle.load(f)
+    word_counts = cPickle.load(f)
+    skip_word_counts = cPickle.load(f)
+    token_count = cPickle.load(f)
     POS_id_dict = cPickle.load(f)
     f.close()
-    id_dict[wild_card] = "*"
 
-    f = open("best_POS_2.dat","rb")
-    #f = open("best_POS_wbrown.dat","rb")
-    #f = open("best_brown_2.dat","rb")
+
+    f = open("%s_best_POS.dat" % options.output,"rb")
     best_pos_dict = cPickle.load(f)
-    cPickle.load(f)
+    skip_best_pos_dict = cPickle.load(f)
     unigrams = cPickle.load(f)
     f.close()
 
-    '''
-
-    f = open("brown_clusters_2.dat","rb")
-    brown_id_dict = cPickle.load(f)    
-    f.close()
-    '''
-    '''
-    print len(unigrams)
-    
-    for ngram in best_pos_dict:
-        words = decode_id(ngram)
-        pos = decode_id(best_pos_dict[ngram])
-        
-        if len(words) == len(pos):
-            print [id_dict[word] for word in words]
-            print [brown_id_dict[word] for word in words]
-            print pos
-            for i in range(len(words)):
-                print id_dict[words[i]]
-                print pos[i]
-                ID = words[i]
-                ID = ID << 18 | pos[i]
-                try:
-                    print unigrams[ID]
-                except:
-                    print "BAD!!!"
-        else:
-            print [id_dict[word] for word in words]
-            print [brown_id_dict[word] for word in words]
-            print pos
-    print djslkdfjs
-    '''
-       
-        
-
-    #f = open("best_POS_2.dat","rb")
-    #f = open("best_POS_wbrown.dat","rb")
-    #best_true_pos_dict = cPickle.load(f)
-    #f.close()
-
-
-    f = open("pos_stats_2.dat", "rb")
-    #f = open("pos_stats_wbrown.dat", "rb")
-    #f = open("brown_stats_2.dat", "rb")
-    pos_stats = cPickle.load(f)
+    f = open("%s_LPR_stats.dat" % options.output,"rb")
+    cond_prob_dict = cPickle.load(f)
+    skip_cond_prob_dict = cPickle.load(f)
     f.close()
 
-    f = open("compositionality_info_2.dat","rb")
-    total_counts = cPickle.load(f)
-    paired_counts = cPickle.load(f)
-    f.close()
+    id_dict[wild_card] = "*"
+
+
+    total_count = None
+    paired_counts = None
 
     nodes_dict = {}
     pos_dict = {}
@@ -392,143 +295,231 @@ if __name__ == "__main__":
     id_num = 0
     pos_id = 0
 
-    ngram_list = ngrams.keys()
+    if not options.silent:
+        print "adding regular n-gram nodes"
+
+    ngram_list = word_counts.keys() # regular n-grams
     ngram_list.sort(reverse=True)
     for ngram in ngram_list:
         if not is_multi(ngram):
             continue
-        ngram_count += 1
-        if ngram_count % 1000 == 0:
-            print ngram_count
+        words = decode_id(ngram)
         if ngram not in nodes_dict:
-            print "initial"
-            print " ".join([id_dict[word] for word in decode_id(ngram)])
-            print best_pos_dict[ngram]
-            real_pos = get_real_pos(ngram,best_pos_dict[ngram])
+            real_pos = best_pos_dict[ngram]
             if real_pos not in pos_dict:
                 pos_dict[real_pos] = pos_id
                 pos_id += 1
-            syntactic_predictability,topic_predictability = get_predictabilities(ngram,best_pos_dict[ngram],pos_stats,total_counts,paired_counts,ngrams,unigrams)
-            print syntactic_predictability
-            print topic_predictability
-            print ngrams[ngram]
-            nodes_dict[ngram] = Node(id_num,pos_dict[real_pos],ngrams[ngram],topic_predictability, syntactic_predictability,len(decode_id(ngram)))
-            id_num += 1
-        words = decode_id(ngram)
-        #pos = decode_id(best_true_pos_dict[ngram])
-        pos = decode_id(best_pos_dict[ngram])
-        if len(pos) > words:
-            start = pos[1]
-            end = pos[0]
-            pos = pos[2:]
-        else:
-            start = -1
-            end = -1
-
-        if use_brown_nouns:
-            for i in range(len(pos)):
-                if pos[i] > len(POS_id_dict):
-                    pos[i] = pos[i] % len(POS_id_dict)
-
-        pos = [POS_id_dict[item] for item in pos]
-            
+            syntactic_predictability = get_syntactic_predictability_reg(words,cond_prob_dict)          
+            nodes_dict[ngram] = Node(ngram,id_num,pos_dict[real_pos],word_counts[ngram], syntactic_predictability,len(words),False)
+            id_num += 1                    
         if len(words) > 2:
             for i in range(len(words)):
-                below_ngram = get_multi_id_range_skip(words,0,i,i+1,len(words))
-                if below_ngram in ngrams:
-                    if i != 0 and i != len(words) - 1:
-                        if start == -1:
-                            if not matches_gap(pos,i,i+1):
-                                continue
-
-                        elif i == start - 1:
-                            if not matches_gap(pos,start -1,end):
-                                continue
-
-                        elif i == end:
-                            if not matches_gap(pos,start,end + 1):
-                                continue
-
-                        else:
-                            continue
-                            
+                syntactic_predictability = None
+                length = None
+                count = None
+                temp_words = words[:i] + words[i+1:]
+                if i > 0 and i < len(words) - 1:
+                    skip = True
+                    below_ngram = get_multi_id_range_skip(words,0,i,i+1,len(words))
+                    if below_ngram in skip_cond_prob_dict:
+                        length = len(words) - 1
+                        if below_ngram not in nodes_dict:
+                            loc = i -1
+                            syntactic_predictability = get_syntactic_predictability_skip(temp_words,loc, cond_prob_dict,skip_cond_prob_dict)
+                            count = skip_word_counts[below_ngram]
+                    else:
+                        nodes_dict[ngram].syntactic_predictability[i] = 999999
+                else:
+                    skip = False
+                    below_ngram = get_multi_id(temp_words)
+                    if below_ngram in cond_prob_dict:
+                        length = len(words) - 1
+                        if below_ngram not in nodes_dict:
+                            syntactic_predictability = get_syntactic_predictability_reg(temp_words, cond_prob_dict)
+                            count = word_counts[below_ngram] 
+                    else:
+                        nodes_dict[ngram].syntactic_predictability[i] = 999999  
                         
+                if length != None:
                     if below_ngram not in nodes_dict:
-                        print "below"
-                        print " ".join([id_dict[word] for word in decode_id(below_ngram)])
-                        print best_pos_dict[ngram]
-                        real_pos = get_real_pos(below_ngram,best_pos_dict[below_ngram])
+                        if skip:
+                            real_pos = skip_best_pos_dict[below_ngram]
+                        else:
+                            real_pos = best_pos_dict[below_ngram]
+                        if real_pos not in pos_dict:
+                            pos_dict[real_pos] = pos_id
+                            pos_id += 1
+                        nodes_dict[below_ngram] = Node(below_ngram, id_num,pos_dict[real_pos],count, syntactic_predictability,length,skip)
+                        id_num += 1
+                    nodes_dict[below_ngram].above_nodes.append(nodes_dict[ngram].id_num)
+                    nodes_dict[ngram].below_nodes.append(nodes_dict[below_ngram].id_num)                
+            nodes_dict[ngram].syntactic_predictability = max(0, min(nodes_dict[ngram].syntactic_predictability))
+
+    if not options.silent:
+        print "adding skip n-gram nodes"
+
+    ngram_list = skip_word_counts.keys() # skip n-grams
+    ngram_list.sort(reverse=True)
+    for ngram in ngram_list:
+        if not is_multi(ngram):
+            continue
+
+        words = decode_id(ngram)
+        loc = words[0]
+        words = words[1:]
+        if ngram not in nodes_dict:
+            real_pos = skip_best_pos_dict[ngram]
+            if real_pos not in pos_dict:
+                pos_dict[real_pos] = pos_id
+                pos_id += 1
+            syntactic_predictability = get_syntactic_predictability_skip(words,loc, cond_prob_dict,skip_cond_prob_dict)          
+            nodes_dict[ngram] = Node(ngram,id_num,pos_dict[real_pos],skip_word_counts[ngram], syntactic_predictability,len(words),True)
+            id_num += 1
+
+            
+        if len(words) > 2:
+            for i in set([0,loc,loc+1,len(words) - 1]):
+                syntactic_predictability = None
+                length = None
+                count = None
+                temp_words = words[:i] + words[i+1:]
+                if not ((i== 0 and loc ==0) or (i== len(temp_words) and loc == i - 1)):
+                    if i <= loc:
+                        temp_loc = loc - 1
+                    else:
+                        temp_loc = loc
+                    skip = True
+                    below_ngram = get_multi_id_range_skip(temp_words,0,temp_loc + 1,temp_loc + 1,len(temp_words))
+                    if below_ngram in skip_cond_prob_dict:
+                        length = len(words) - 1
+                        if below_ngram not in nodes_dict:
+                            syntactic_predictability = get_syntactic_predictability_skip(temp_words,temp_loc, cond_prob_dict,skip_cond_prob_dict)
+                            count = skip_word_counts[below_ngram]
+                    else:
+                        nodes_dict[ngram].syntactic_predictability[i] = 999999                                                              
+                                                                
+                else:
+                    skip = False
+                    if i == 0:
+                        below_ngram = get_multi_id(temp_words)
+                        if below_ngram in cond_prob_dict:
+                            length = len(temp_words)
+                            if below_ngram not in nodes_dict:
+                                syntactic_predictability = get_syntactic_predictability_reg(temp_words, cond_prob_dict)
+                                count = word_counts[below_ngram]
+                        else:
+                            nodes_dict[ngram].syntactic_predictability[i] = 999999 
+                    else:
+                        below_ngram = get_multi_id(temp_words)
+                        if below_ngram in cond_prob_dict:
+                            length = len(temp_words)
+                            if below_ngram not in nodes_dict:
+                                syntactic_predictability = get_syntactic_predictability_reg(temp_words, cond_prob_dict)
+                                count = word_counts[below_ngram]
+                        else:
+                            nodes_dict[ngram].syntactic_predictability[i] = 999999 
+
+                        
+                if length != None:   
+                    if below_ngram not in nodes_dict:
+                        if skip:
+                            real_pos = skip_best_pos_dict[below_ngram]
+                        else:
+                            real_pos = best_pos_dict[below_ngram]
                         if real_pos not in pos_dict:
                             pos_dict[real_pos] = pos_id
                             pos_id += 1
 
-                        syntactic_predictability,topic_predictability = get_predictabilities(below_ngram,best_pos_dict[below_ngram],pos_stats,total_counts,paired_counts,ngrams,unigrams)                       
-                        print syntactic_predictability
-                        print topic_predictability
-                        print ngrams[below_ngram]
-
-                        nodes_dict[below_ngram] = Node(id_num,pos_dict[real_pos],ngrams[below_ngram],topic_predictability, syntactic_predictability,len(words) -1)
+                        nodes_dict[below_ngram] = Node(below_ngram,id_num,pos_dict[real_pos],count, syntactic_predictability,length,skip)
                         id_num += 1
-                    #nodes_dict[below_ngram].above_nodes.append(nodes_dict[ngram])
-                    #nodes_dict[ngram].below_nodes.append(nodes_dict[below_ngram])
                     nodes_dict[below_ngram].above_nodes.append(nodes_dict[ngram].id_num)
                     nodes_dict[ngram].below_nodes.append(nodes_dict[below_ngram].id_num)                
+            nodes_dict[ngram].syntactic_predictability = max(0, min(nodes_dict[ngram].syntactic_predictability))
 
     nodes = nodes_dict.values()
 
     ngram_lookup = {}
     node_lookup = {}
+    reg_count = 0
+    skip_count = 0
+    
     for ngram in nodes_dict:
         ngram_lookup[nodes_dict[ngram].id_num] = ngram
         node_lookup[nodes_dict[ngram].id_num] = nodes_dict[ngram]
+        if ngram in cond_prob_dict:
+            words = [id_dict[word] for word in decode_id(ngram)]
+            pos = [POS_id_dict[pos_id] for pos_id in decode_id(best_pos_dict[ngram])]
+        else:
+            words = [id_dict[word] for word in decode_id(ngram)[1:]]
+            pos = [POS_id_dict[pos_id] for pos_id in decode_id(skip_best_pos_dict[ngram])[1:]]
 
-    '''
+        nodes_dict[ngram].has_pronoun = lang_specific_helper.has_pronoun(words,pos)
 
-    f = open("initial_ngrams.dat","rb")
-    id_dict = cPickle.load(f)
-    f.close()
+    if not options.silent:
+        print "finding overlaps in corpus"
 
 
-    f = open("lattice.dat","rb")
-    nodes = cPickle.load(f)
-    pos_id = cPickle.load(f)
-    ngram_lookup = cPickle.load(f)
-    node_lookup = cPickle.load(f)
-    f.close()
-    '''
-    '''
-    relevant_node_total = 0.0
-    ngram_count = 0
+    find_overlap_list = set()
+    not_wanted_list = set()
+    
+    id_lookup = {}
+
+    for ID in ngram_lookup:
+        id_lookup[ngram_lookup[ID]] = ID
+
+    
     for node in nodes:
-        ngram_count += 1
-        if ngram_count % 1000 == 0:
-            #break
-            print ngram_count
-        relevant_nodes = get_relevant_nodes(node,node_lookup)
-        relevant_nodes.sort()
-        node.relevant_nodes = relevant_nodes
-        relevant_node_total += len(relevant_nodes)
+        check_covered(node)
+        if not node.is_covered:
+            set_shared_syntactic_predictability(node)
+            if not node.is_covered:
+                find_overlap_list.add(ngram_lookup[node.id_num])
 
-    print relevant_node_total/len(nodes)
-    '''
+
+
+
+    for inQ in inQs:
+        inQ.put(find_overlap_list)
+
+
+    done_threads = 0
+    overlaps = Counter()
+    while done_threads < options.workers:
+        result = Q.get()
+        if result == -1:
+            done_threads += 1
+        else:
+            overlaps.update(result)
+            
+    for inQ in inQs:
+        inQ.put(None)
+
+    if not options.silent:
+        print "adding overlaps to lattice"
+
+    to_delete = set()
+    temp_count = 0
+    overlap_count = 0
+
+    for pair in overlaps:
+        node1 = id_lookup[pair[0]]
+        node2 = id_lookup[pair[1]]
+        if overlaps[pair] >= min_overlaps and node1 != node2:
+            overlap_count += 1
+            node_lookup[node1].overlaps[node2] = overlaps[pair]
+            node_lookup[node2].overlaps[node1] = overlaps[pair]
+  
+
     nodes.sort()
-    #return nodes,pos_id,ngram_lookup
 
-    fout = open("lattice.dat","wb")
+    if not options.silent:
+        print "total overlaps added: %d" % overlap_count
+
+
+    fout = open("%s_lattice.dat" % options.output,"wb")
     cPickle.dump(nodes,fout,-1)
-    cPickle.dump(pos_dict,fout,-1)
-    cPickle.dump(ngram_lookup, fout, -1)
-    cPickle.dump(node_lookup,fout,-1)
     fout.close()
 
-
-    '''
-    sys.setrecursionlimit(3000000)
-    fout = open("lattice.dat","wb")
-    cPickle.dump(nodes,fout,-1)
-    cPickle.dump(nodes_dict,fout,-1)
-    cPickle.dump(pos_id,fout,-1)
-    fout.close()
-    '''        
+    
         
     

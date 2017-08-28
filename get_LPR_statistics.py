@@ -14,10 +14,9 @@ import math
 import sys
 import cPickle
 from multiprocessing import Process,Queue,Manager
-from pos_helper import matches_gap_en,matches_gap_fr,matches_gap_ja, matches_gap_hr,matches_gap_en_bnc, matches_gap_universal
+import lang_specific_helper
 from multi_helper import *
-#from corpus_reader import read_sentence_from_corpus
-from corpus_reader import read_sentence_from_corpus_ICWSM_quick,read_sentence_from_corpus_BNC,read_sentence_from_corpus_ja,read_sentence_from_corpus_hr,read_sentence_from_corpus_simple
+from corpus_reader import read_sentence_from_corpus
 gc.disable()
 import codecs
 
@@ -29,7 +28,6 @@ def prepare_freq_dicts(id_dict,full_ngrams, full_skipgrams,best_pos_dict,best_po
     ### the count with just POS tags for all elements except one (which is the word
     ### and its tag) and the count with just POS tags and one wild card
 
-    #fout = codecs.open("missing_POS.txt","w",encoding ="utf-8")
 
     pos_counts = {}
     pos_skip_counts = {}
@@ -38,9 +36,7 @@ def prepare_freq_dicts(id_dict,full_ngrams, full_skipgrams,best_pos_dict,best_po
 
         for i in range(1,len(words)):
             pos_skip_counts[get_multi_id_range_wild_skip(words,1,words[0] + 2, words[0] + 2, len(words), i)] = 0
-        #if best_pos_skip_dict[ngram] == 0:
-        #    fout.write("|".join([id_dict[word] for word in words[1:]]) + "\n")
-        #    continue
+
 
         pos = decode_id(best_pos_skip_dict[ngram])
 
@@ -271,45 +267,27 @@ def get_pos_counts(start_sent,end_sent,pos_counts,pos_path, pos_skip_counts, pos
 
 
 
-f = open("temp_options_%s.dat" % sys.argv[1],"rb")
+f = open("%s_options.dat" % sys.argv[1],"rb")
 options = cPickle.load(f)
 f.close()
-if options.lang == "uni":
-    matches_gap = matches_gap_universal
-    read_sentence_from_corpus = read_sentence_from_corpus_BNC
-elif options.lang == "en":
-    if "bnc" in options.corpus:
-        matches_gap = matches_gap_en_bnc
-        read_sentence_from_corpus = read_sentence_from_corpus_BNC
-    else:
-        matches_gap = matches_gap_en
-        read_sentence_from_corpus = read_sentence_from_corpus_ICWSM_quick
-elif options.lang == "ja":
-    matches_gap = matches_gap_ja
-    read_sentence_from_corpus = read_sentence_from_corpus_ja
-elif options.lang == "hr":
-    matches_gap = matches_gap_hr
-    read_sentence_from_corpus = read_sentence_from_corpus_hr    
-elif options.lang == "fr":
-    matches_gap = matches_gap_fr
-else:
-    matches_gap = matches_gap_en
-    read_sentence_from_corpus = read_sentence_from_corpus_simple  
+
+lang_specific_helper.set_lang(options.lang, options.corpus)
+matches_gap = lang_specific_helper.matches_gap
 
 
 if __name__ == "__main__":
 
-    f = open("temp_ngrams_%s.dat" % sys.argv[1],"rb")
+    f = open("%s_ngrams.dat" % options.output,"rb")
+    sentence_count = cPickle.load(f)
     id_dict = cPickle.load(f)
     full_ngrams = cPickle.load(f)
     full_skipgrams = cPickle.load(f)
     token_count = cPickle.load(f)
-    sentence_count = cPickle.load(f)
     POS_id_dict = cPickle.load(f)
     f.close()
     id_dict[wild_card] = "*"
 
-    f = open("temp_best_POS_%s.dat" % sys.argv[1],"rb")
+    f = open("%s_best_POS.dat" % options.output,"rb")
     best_pos_dict = cPickle.load(f)
     best_pos_skip_dict = cPickle.load(f)
     f.close()
@@ -364,7 +342,7 @@ if __name__ == "__main__":
             for i in range(len(words)):
                 cond_prob_dict[ngram].append(math.log(full_ngrams[ngram],2) - math.log(pos_counts[get_multi_id_range_wild(words,0,len(words), i)],2) - math.log(pos_counts[get_multi_id_range_one_word(pos,words,0,len(words),i)],2) + math.log(pos_counts[get_multi_id_range_wild(pos,0,len(words),i)],2))
 
-    fout = open("temp_LPR_stats_%s.dat" % sys.argv[1], "wb")
+    fout = open("%s_LPR_stats.dat" % options.output, "wb")
     cPickle.dump(cond_prob_dict,fout,-1)
     cPickle.dump(skip_cond_prob_dict,fout,-1)
     cPickle.dump(pos_counts,fout,-1)

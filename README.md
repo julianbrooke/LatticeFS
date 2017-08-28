@@ -6,16 +6,17 @@ Julian Brooke, Jan Snajder, and Timothy Baldwin. In press. Unsupervised Acquisit
 
 ## Code
 
-*note: this code is only for documentary purposes, currently not usable without access to relevant data. Will be updated with a general, end-to-end solution which works for new corpora in advance of official publication of the paper*
-
 - multi_helper.py: internal library for representation of multiword phrases using a single Python int
-- pos_helper.py: internal library for matching POS sequences (for identifying gaps)
+- lang_specific_helper.py: internal library with language specific functions, including pos matching for gaps
 - corpus_reader.py: internal library for reading in corpora
 - get_ngram_statistics.py: extracts initial n-gram statistics and applies n-gram frequency threshold
 - get_best_POS.py: identifies the single best POS for each n-gram, which is used for calculating LPR statistics
 - get_LPR_statistics.py: derives LPR statistics for n-grams
 - build_lattice.py: creates lattice representation
-- iterate_over_lattice.py: optimize lattice to identify formulaic sequences
+- optimize_FS_lattice.py: optimize lattice to identify formulaic sequences
+- Lattice_FS.py: main script which runs the all the above scripts end-to-end to create an FS lexicon. Run without options
+  to see list of options with explanations. See comments in code for additional information.
+- evaluate_FS_lexicon.py: calculates precision/recall/f-score for a lexicon by comparison to a test set        
 
 ## Lexicons
 
