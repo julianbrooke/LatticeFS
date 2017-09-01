@@ -16,11 +16,12 @@
 # in corpus_reader.py, or define your own
 #
 # This version of the program has support for standard tagsets in English,
-# French, Croatian, and Japanese. For other languages, modify pos_helper.py
+# French, Croatian, and Japanese. For other languages, modify
+# lang_specific_helper.py to add new functions for your language
 # 
 # The number of workers (parallel processes) is fixed on the command line,
 # default 1, but for large corpora more is recommended. This only affects
-# the collection of n-gram and LPR statistics
+# the collection of n-gram, best POS, and LPR statistics
 #
 # For historical reasons (and ensure that memory is freed at the end of each step),
 # this script executes each of the major steps in an entirely separate python
@@ -50,7 +51,7 @@ py_exe = "python"
 
 if __name__ == "__main__":
     parser = OptionParser()
-    parser.add_option("-c","--corpus",dest="corpus",help="the corpus to be segmented, should be tokenized with one sentence per line")
+    parser.add_option("-c","--corpus",dest="corpus",help="the corpus, should be tokenized with each line consisting of a lemmatized token and POS tag, separated by a tab")
     parser.add_option("-w","--workers",default=1,dest="workers",type="int", help="the number of worker processes used, improves speed for extraction of statistics but increases memory usage by a factor of w")
     parser.add_option("-n",dest="n",default=8,type="int",help="largest n considered for n-grams, default 8")
     parser.add_option("-f","--frequency",dest="frequency",type="int",default=10000000, help="lowest allowed frequency for output vocab, once per FREQUENCY, default 10000000")
